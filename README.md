@@ -14,6 +14,8 @@ A public, unauthenticated API for extracting values from HTTP(S) HTML pages usin
 
 Returns `{"url":"https://example.com","status":200,"data":{"title":["Example Domain"],"links":[]}}` (extracted values depend on the target page). Missing matches return empty arrays. URL is required; selectors are optional. Each name maps to one Scrapling CSS selector (including `::text` or `::attr(...)`). Maximum 20 selectors, 20 returned values per selector. Invalid input/destinations/selectors return 422, oversized upstream pages return 413, and upstream failures return 502.
 
+Some sites, including Booking.com, respond to the HTTP fetcher with a JavaScript anti-bot challenge rather than the requested page. A recognized HTTP 202 challenge now returns 502 with an explanatory `detail` instead of misleading empty data. This service does not render JavaScript or bypass challenges; an authorized browser-rendering integration would need separate network-egress protections before it could be exposed publicly, and may still be blocked by the target site.
+
 ## Run and test
 
 ```sh

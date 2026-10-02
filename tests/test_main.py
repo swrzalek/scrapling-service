@@ -65,3 +65,35 @@ def test_redirect_rechecks_destination():
     with patch("app.main.resolve_public", side_effect=check), patch("scrapling.engines.static._SyncSessionLogic.get", return_value=Redirect()):
         response = client.post("/v1/scrape", json={"url": "https://example.com"})
     assert response.status_code == 422
+
+
+def test_booking_challenge_is_not_reported_as_empty_success():
+    class Challenge:
+        status = 202
+        headers = {}
+
+    def fake_fetch(url, **kwargs):
+        kwargs["content_callback"](b"<h1>JavaScript is disabled</h1><script>function reportChallengeError(){}</script>")
+        return Challenge()
+
+    with patch("app.main.resolve_public", return_value=("www.booking.com", 443, "1.1.1.1")), patch("scrapling.engines.static._SyncSessionLogic.get", side_effect=fake_fetch):
+        response = client.post("/v1/scrape", json={"url": "https://www.booking.com/", "selectors": {"title": "title::text"}})
+
+    assert response.status_code == 502
+    assert "anti-bot JavaScript challenge" in response.json()["detail"]
+
+
+def test_normal_accepted_response_still_extracts():
+    class Accepted:
+        status = 202
+        headers = {}
+
+    def fake_fetch(url, **kwargs):
+        kwargs["content_callback"](b"<title>Queued</title>")
+        return Accepted()
+
+    with patch("app.main.resolve_public", return_value=("example.com", 443, "1.1.1.1")), patch("scrapling.engines.static._SyncSessionLogic.get", side_effect=fake_fetch):
+        response = client.post("/v1/scrape", json={"url": "https://example.com/", "selectors": {"title": "title::text"}})
+
+    assert response.status_code == 200
+    assert response.json()["data"]["title"] == ["Queued"]

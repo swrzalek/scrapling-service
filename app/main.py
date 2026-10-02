@@ -100,6 +100,11 @@ def scrape(request: ScrapeRequest) -> ScrapeResponse:
 
         if page.status >= 400:
             raise HTTPException(status_code=502, detail=f"Upstream returned HTTP {page.status}")
+        if page.status == 202 and b"JavaScript is disabled" in body and b"challenge" in body.lower():
+            raise HTTPException(
+                status_code=502,
+                detail="Upstream returned an anti-bot JavaScript challenge (HTTP 202), not the requested page; HTTP-only scraping cannot extract its content",
+            )
         try:
             parsed = Selector(content=bytes(body), url=current)
             data = {name: parsed.css(css).getall()[:MAX_VALUES] for name, css in request.selectors.items()}
