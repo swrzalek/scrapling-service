@@ -42,6 +42,21 @@ def test_extracts_with_scrapling_selectors():
     assert response.json()["data"] == {"title": ["Example"], "links": ["/item"]}
 
 
+def test_no_selectors_returns_bounded_visible_text():
+    from app.main import MAX_TEXT_LENGTH
+
+    def fake_fetch(url, **kwargs):
+        kwargs["content_callback"](b"<html><head><title>Example</title></head><body><main><h1>Hello</h1><p>Useful words</p></main><script>ignore()</script><style>hide</style><noscript>no JS</noscript></body></html>")
+        return Page()
+
+    with patch("app.main.resolve_public", return_value=("example.com", 443, "93.184.215.14")), patch("scrapling.engines.static._SyncSessionLogic.get", side_effect=fake_fetch):
+        response = client.post("/v1/scrape", json={"url": "https://example.com"})
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"title": ["Example"], "text": ["Hello Useful words"]}
+    assert len(response.json()["data"]["text"][0]) <= MAX_TEXT_LENGTH
+
+
 def test_body_size_limit():
     def fake_fetch(url, **kwargs):
         kwargs["content_callback"](b"x" * 1_000_001)
@@ -132,6 +147,16 @@ def test_firecrawl_metadata_title_when_head_is_missing():
     with patch("app.main.resolve_public", return_value=("example.com", 443, "1.1.1.1")), patch("app.main.urlopen", return_value=BytesIO(json.dumps(body).encode())), patch.dict("os.environ", {"FIRECRAWL_API_KEY": "test-secret"}):
         response = firecrawl_fallback("https://example.com/", {"title": "title::text", "links": "a::attr(href)"})
     assert response.data == {"title": ["Booking.com"], "links": ["/hotel"]}
+
+
+def test_firecrawl_no_selectors_uses_metadata_title():
+    from app.main import firecrawl_fallback
+
+    body = {"success": True, "data": {"html": "<main><p>Available hotels</p></main>",
+            "metadata": {"title": "Booking.com", "statusCode": 200}}}
+    with patch("app.main.resolve_public", return_value=("example.com", 443, "1.1.1.1")), patch("app.main.urlopen", return_value=BytesIO(json.dumps(body).encode())), patch.dict("os.environ", {"FIRECRAWL_API_KEY": "test-secret"}):
+        response = firecrawl_fallback("https://example.com/", {})
+    assert response.data == {"title": ["Booking.com"], "text": ["Available hotels"]}
 
 
 def test_normal_accepted_response_still_extracts():

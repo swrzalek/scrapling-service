@@ -17,6 +17,7 @@ from scrapling.fetchers import FetcherSession
 MAX_BYTES = 1_000_000
 MAX_REDIRECTS = 3
 MAX_VALUES = 20
+MAX_TEXT_LENGTH = 10_000
 FIRECRAWL_URL = "https://api.firecrawl.dev/v2/scrape"
 
 app = FastAPI(title="Scrapling Service", version="1.0.0")
@@ -64,7 +65,13 @@ def health() -> dict[str, str]:
 def extract(html: bytes, url: str, status: int, selectors: dict[str, str], provider: str) -> ScrapeResponse:
     try:
         parsed = Selector(content=html, url=url)
-        data = {name: parsed.css(css).getall()[:MAX_VALUES] for name, css in selectors.items()}
+        if selectors:
+            data = {name: parsed.css(css).getall()[:MAX_VALUES] for name, css in selectors.items()}
+        else:
+            titles = parsed.css("title::text").getall()
+            fragments = parsed.css("body *:not(script):not(style):not(noscript)::text").getall()
+            text = " ".join(" ".join(fragments).split())[:MAX_TEXT_LENGTH]
+            data = {"title": titles[:1], "text": [text] if text else []}
     except (ValueError, TypeError, SyntaxError) as exc:
         raise HTTPException(status_code=422, detail=f"Invalid CSS selector: {exc}") from exc
     return ScrapeResponse(url=url, status=status, data=data, provider=provider)
@@ -104,10 +111,9 @@ def firecrawl_fallback(url: str, selectors: dict[str, str]) -> ScrapeResponse:
         raise HTTPException(status_code=413, detail="Firecrawl HTML exceeds 1 MB")
     extracted = extract(html.encode(), final_url, status, selectors, "firecrawl")
     # Firecrawl's processed HTML can omit <head>; its metadata preserves the title.
-    if isinstance(metadata.get("title"), str):
-        for name, css in selectors.items():
-            if css == "title::text" and not extracted.data[name]:
-                extracted.data[name] = [metadata["title"]]
+    if isinstance(metadata.get("title"), str) and not extracted.data.get("title"):
+        if not selectors or selectors.get("title") == "title::text":
+            extracted.data["title"] = [metadata["title"]]
     return extracted
 
 
