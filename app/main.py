@@ -12,12 +12,12 @@ from curl_cffi import CurlOpt
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from scrapling import Selector
+from scrapling.core.shell import Convertor
 from scrapling.fetchers import FetcherSession
 
 MAX_BYTES = 1_000_000
 MAX_REDIRECTS = 3
 MAX_VALUES = 20
-MAX_TEXT_LENGTH = 10_000
 FIRECRAWL_URL = "https://api.firecrawl.dev/v2/scrape"
 
 app = FastAPI(title="Scrapling Service", version="1.0.0")
@@ -33,6 +33,25 @@ class ScrapeResponse(BaseModel):
     status: int
     data: dict[str, list[str]]
     provider: str = "scrapling"
+
+
+class PageMetadata(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    sourceURL: str
+    statusCode: int
+
+
+class PageData(BaseModel):
+    markdown: str
+    html: str
+    metadata: PageMetadata
+
+
+class FullScrapeResponse(BaseModel):
+    success: bool = True
+    data: PageData
+    provider: str
 
 
 def resolve_public(url: str) -> tuple[str, int, str]:
@@ -62,27 +81,38 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-def extract(html: bytes, url: str, status: int, selectors: dict[str, str], provider: str) -> ScrapeResponse:
+def extract(html: bytes, url: str, status: int, selectors: dict[str, str], provider: str) -> ScrapeResponse | FullScrapeResponse:
     try:
         parsed = Selector(content=html, url=url)
         if selectors:
             data = {name: parsed.css(css).getall()[:MAX_VALUES] for name, css in selectors.items()}
         else:
-            titles = parsed.css("title::text").getall()
-            fragments = parsed.css("body *:not(script):not(style):not(noscript)::text").getall()
-            text = " ".join(" ".join(fragments).split())[:MAX_TEXT_LENGTH]
-            data = {"title": titles[:1], "text": [text] if text else []}
+            body_element = parsed.css("body").first or parsed
+            clean = Convertor._sanitize_for_ai(Convertor._strip_noise_tags(body_element))
+            return FullScrapeResponse(
+                data=PageData(
+                    markdown=Convertor._convert_to_markdown(clean.html_content),
+                    html=html.decode("utf-8", errors="replace"),
+                    metadata=PageMetadata(
+                        title=parsed.css("title::text").get(),
+                        description=parsed.css('meta[name="description"]::attr(content)').get(),
+                        sourceURL=url,
+                        statusCode=status,
+                    ),
+                ),
+                provider=provider,
+            )
     except (ValueError, TypeError, SyntaxError) as exc:
         raise HTTPException(status_code=422, detail=f"Invalid CSS selector: {exc}") from exc
     return ScrapeResponse(url=url, status=status, data=data, provider=provider)
 
 
-def firecrawl_fallback(url: str, selectors: dict[str, str]) -> ScrapeResponse:
+def firecrawl_fallback(url: str, selectors: dict[str, str]) -> ScrapeResponse | FullScrapeResponse:
     key = os.environ.get("FIRECRAWL_API_KEY")
     if not key:
         raise HTTPException(status_code=502, detail="Upstream returned an anti-bot JavaScript challenge; Firecrawl fallback is not configured")
     # Never let a request choose the API endpoint, token, or provider options.
-    payload = json.dumps({"url": url, "formats": ["html"], "timeout": 30000}).encode()
+    payload = json.dumps({"url": url, "formats": ["html"] if selectors else ["markdown", "html"], "timeout": 30000}).encode()
     request = Request(FIRECRAWL_URL, data=payload, headers={
         "Authorization": f"Bearer {key}", "Content-Type": "application/json"
     }, method="POST")
@@ -109,6 +139,23 @@ def firecrawl_fallback(url: str, selectors: dict[str, str]) -> ScrapeResponse:
         raise HTTPException(status_code=502, detail="Firecrawl returned an upstream error or challenge, not the requested page")
     if len(html.encode()) > MAX_BYTES:
         raise HTTPException(status_code=413, detail="Firecrawl HTML exceeds 1 MB")
+    if not selectors:
+        markdown = data.get("markdown")
+        if not isinstance(markdown, str):
+            raise HTTPException(status_code=502, detail="Firecrawl returned no usable markdown")
+        return FullScrapeResponse(
+            data=PageData(
+                markdown=markdown,
+                html=html,
+                metadata=PageMetadata(
+                    title=metadata.get("title") if isinstance(metadata.get("title"), str) else None,
+                    description=metadata.get("description") if isinstance(metadata.get("description"), str) else None,
+                    sourceURL=final_url,
+                    statusCode=status,
+                ),
+            ),
+            provider="firecrawl",
+        )
     extracted = extract(html.encode(), final_url, status, selectors, "firecrawl")
     # Firecrawl's processed HTML can omit <head>; its metadata preserves the title.
     if isinstance(metadata.get("title"), str) and not extracted.data.get("title"):
@@ -117,8 +164,8 @@ def firecrawl_fallback(url: str, selectors: dict[str, str]) -> ScrapeResponse:
     return extracted
 
 
-@app.post("/v1/scrape", response_model=ScrapeResponse)
-def scrape(request: ScrapeRequest) -> ScrapeResponse:
+@app.post("/v1/scrape", response_model=FullScrapeResponse | ScrapeResponse)
+def scrape(request: ScrapeRequest) -> ScrapeResponse | FullScrapeResponse:
     if any(not name or len(name) > 64 or not css or len(css) > 256 for name, css in request.selectors.items()):
         raise HTTPException(status_code=422, detail="Selector names must be 1-64 characters and CSS selectors 1-256 characters")
 

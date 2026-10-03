@@ -42,9 +42,7 @@ def test_extracts_with_scrapling_selectors():
     assert response.json()["data"] == {"title": ["Example"], "links": ["/item"]}
 
 
-def test_no_selectors_returns_bounded_visible_text():
-    from app.main import MAX_TEXT_LENGTH
-
+def test_no_selectors_returns_full_page():
     def fake_fetch(url, **kwargs):
         kwargs["content_callback"](b"<html><head><title>Example</title></head><body><main><h1>Hello</h1><p>Useful words</p></main><script>ignore()</script><style>hide</style><noscript>no JS</noscript></body></html>")
         return Page()
@@ -53,8 +51,14 @@ def test_no_selectors_returns_bounded_visible_text():
         response = client.post("/v1/scrape", json={"url": "https://example.com"})
 
     assert response.status_code == 200
-    assert response.json()["data"] == {"title": ["Example"], "text": ["Hello Useful words"]}
-    assert len(response.json()["data"]["text"][0]) <= MAX_TEXT_LENGTH
+    result = response.json()
+    assert result["success"] is True
+    assert result["provider"] == "scrapling"
+    assert result["data"]["metadata"] == {"title": "Example", "description": None, "sourceURL": "https://example.com", "statusCode": 200}
+    assert "<title>Example</title>" in result["data"]["html"]
+    assert "Hello" in result["data"]["markdown"]
+    assert "Useful words" in result["data"]["markdown"]
+    assert "ignore()" not in result["data"]["markdown"]
 
 
 def test_body_size_limit():
@@ -149,14 +153,21 @@ def test_firecrawl_metadata_title_when_head_is_missing():
     assert response.data == {"title": ["Booking.com"], "links": ["/hotel"]}
 
 
-def test_firecrawl_no_selectors_uses_metadata_title():
+def test_firecrawl_no_selectors_returns_full_page():
     from app.main import firecrawl_fallback
 
-    body = {"success": True, "data": {"html": "<main><p>Available hotels</p></main>",
+    body = {"success": True, "data": {"html": "<main><p>Available hotels</p></main>", "markdown": "Available hotels",
             "metadata": {"title": "Booking.com", "statusCode": 200}}}
-    with patch("app.main.resolve_public", return_value=("example.com", 443, "1.1.1.1")), patch("app.main.urlopen", return_value=BytesIO(json.dumps(body).encode())), patch.dict("os.environ", {"FIRECRAWL_API_KEY": "test-secret"}):
+    calls = []
+
+    def fake_urlopen(request, timeout):
+        calls.append(json.loads(request.data))
+        return BytesIO(json.dumps(body).encode())
+
+    with patch("app.main.resolve_public", return_value=("example.com", 443, "1.1.1.1")), patch("app.main.urlopen", side_effect=fake_urlopen), patch.dict("os.environ", {"FIRECRAWL_API_KEY": "test-secret"}):
         response = firecrawl_fallback("https://example.com/", {})
-    assert response.data == {"title": ["Booking.com"], "text": ["Available hotels"]}
+    assert calls[0]["formats"] == ["markdown", "html"]
+    assert response.model_dump() == {"success": True, "data": {"markdown": "Available hotels", "html": "<main><p>Available hotels</p></main>", "metadata": {"title": "Booking.com", "description": None, "sourceURL": "https://example.com/", "statusCode": 200}}, "provider": "firecrawl"}
 
 
 def test_normal_accepted_response_still_extracts():

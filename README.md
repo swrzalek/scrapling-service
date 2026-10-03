@@ -12,13 +12,19 @@ A public, unauthenticated API for extracting values from HTTP(S) HTML pages usin
 {"url":"https://example.com","selectors":{"title":"title::text","links":"a::attr(href)"}}
 ```
 
-Returns `{"url":"https://example.com","status":200,"data":{"title":["Example Domain"],"links":[]},"provider":"scrapling"}` (extracted values depend on the target page). `provider` is either `scrapling` or `firecrawl`. Missing matches return empty arrays. URL is required; selectors are optional. Each name maps to one Scrapling CSS selector (including `::text` or `::attr(...)`). Maximum 20 selectors, 20 returned values per selector. Invalid input/destinations/selectors return 422, oversized upstream pages return 413, and upstream failures return 502.
+If you supply `selectors`, the response is `{"url":"https://example.com","status":200,"data":{"title":["Example Domain"],"links":[]},"provider":"scrapling"}` (values depend on the page). Missing matches return empty arrays. Each name maps to one Scrapling CSS selector (including `::text` or `::attr(...)`). Maximum 20 selectors, 20 returned values per selector. Invalid input/destinations/selectors return 422, oversized upstream pages return 413, and upstream failures return 502.
 
-If `selectors` is omitted or empty, `data` instead contains `title` and `text` arrays. `text` contains the visible body text, normalized to single spaces and capped at 10,000 characters; script, style and noscript content is excluded. A missing title or empty body produces an empty array for that field. Supplying named selectors retains the original selector-only response.
+If `selectors` is omitted or empty, return a Firecrawl-style page document instead of selector arrays:
+
+```json
+{"success":true,"data":{"markdown":"# Example Domain\n...","html":"<!doctype html>...","metadata":{"title":"Example Domain","description":null,"sourceURL":"https://example.com","statusCode":200}},"provider":"scrapling"}
+```
+
+The `markdown` and `html` fields contain the complete fetched page (up to the 1 MB upstream HTML limit), not a 10,000-character excerpt. `metadata` includes title, description, source URL and upstream status. `provider` is `scrapling` or `firecrawl`; when Firecrawl handles a challenged page, it returns Firecrawl's processed HTML and Markdown, with the same normalized metadata keys. This is Firecrawl-style, not a byte-for-byte passthrough of all optional Firecrawl response fields. HTTP fetching cannot render JavaScript.
 
 Some sites, including Booking.com, respond to the HTTP fetcher with a JavaScript anti-bot challenge rather than the requested page. On recognized HTTP 202 challenges the API tries Firecrawl's HTML scrape endpoint if `FIRECRAWL_API_KEY` is set on the server. Firecrawl may still fail or return a challenge, in which case the API returns 502 rather than misleading empty data. Other empty matches and upstream failures do not trigger paid fallback. The public API has no authentication: **any caller can trigger billable Firecrawl requests**; add rate limits or authentication before production use. Do not commit API keys to this repository.
 
-Firecrawl's processed HTML may omit `<head>`. If `title::text` has no match, the API uses Firecrawl's title metadata for that selector. Other selectors always extract from the returned HTML.
+Firecrawl's processed HTML may omit `<head>`. For explicitly requested `title::text`, the API uses Firecrawl's title metadata when the HTML has no matching title. Other selectors always extract from the returned HTML.
 
 ## Run and test
 
