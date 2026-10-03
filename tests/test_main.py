@@ -55,7 +55,7 @@ def test_no_selectors_returns_full_page():
     assert result["success"] is True
     assert result["provider"] == "scrapling"
     assert result["data"]["metadata"] == {"title": "Example", "description": None, "sourceURL": "https://example.com", "statusCode": 200}
-    assert "<title>Example</title>" in result["data"]["html"]
+    assert set(result["data"]) == {"markdown", "metadata"}
     assert "Hello" in result["data"]["markdown"]
     assert "Useful words" in result["data"]["markdown"]
     assert "ignore()" not in result["data"]["markdown"]
@@ -167,7 +167,7 @@ def test_firecrawl_no_selectors_returns_full_page():
     with patch("app.main.resolve_public", return_value=("example.com", 443, "1.1.1.1")), patch("app.main.urlopen", side_effect=fake_urlopen), patch.dict("os.environ", {"FIRECRAWL_API_KEY": "test-secret"}):
         response = firecrawl_fallback("https://example.com/", {})
     assert calls[0]["formats"] == ["markdown", "html"]
-    assert response.model_dump() == {"success": True, "data": {"markdown": "Available hotels", "html": "<main><p>Available hotels</p></main>", "metadata": {"title": "Booking.com", "description": None, "sourceURL": "https://example.com/", "statusCode": 200}}, "provider": "firecrawl"}
+    assert response.model_dump() == {"success": True, "data": {"markdown": "Available hotels", "metadata": {"title": "Booking.com", "description": None, "sourceURL": "https://example.com/", "statusCode": 200}}, "provider": "firecrawl"}
 
 
 def test_normal_accepted_response_still_extracts():

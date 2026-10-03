@@ -44,7 +44,6 @@ class PageMetadata(BaseModel):
 
 class PageData(BaseModel):
     markdown: str
-    html: str
     metadata: PageMetadata
 
 
@@ -92,7 +91,6 @@ def extract(html: bytes, url: str, status: int, selectors: dict[str, str], provi
             return FullScrapeResponse(
                 data=PageData(
                     markdown=Convertor._convert_to_markdown(clean.html_content),
-                    html=html.decode("utf-8", errors="replace"),
                     metadata=PageMetadata(
                         title=parsed.css("title::text").get(),
                         description=parsed.css('meta[name="description"]::attr(content)').get(),
@@ -146,7 +144,6 @@ def firecrawl_fallback(url: str, selectors: dict[str, str]) -> ScrapeResponse | 
         return FullScrapeResponse(
             data=PageData(
                 markdown=markdown,
-                html=html,
                 metadata=PageMetadata(
                     title=metadata.get("title") if isinstance(metadata.get("title"), str) else None,
                     description=metadata.get("description") if isinstance(metadata.get("description"), str) else None,
